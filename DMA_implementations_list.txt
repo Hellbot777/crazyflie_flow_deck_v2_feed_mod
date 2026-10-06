@@ -1,0 +1,147 @@
+ ================================================================================
+DMA PERIPHERAL USAGE AND IMPLEMENTATIONS IN CRAZYFLIE FIRMWARE
+================================================================================
+
+Overview of Protocols Utilizing DMA:
+1. UART / USART (Serial Communication)
+   - USART6: Syslink radio/coprocessor communication link (nRF51 / ESP32).
+   - USART3 (UART1): Expansion header communication bus.
+   - USART2 (UART2): Expansion header communication and bootloader/debug trace.
+2. SPI (Serial Peripheral Interface)
+   - SPI1: Primary deck expansion SPI bus.
+   - SPI3: Secondary / alternative deck expansion SPI bus.
+   - SPI2: Onboard sensor SPI bus (e.g., Bosch BMI088 IMU).
+3. I2C (Inter-Integrated Circuit)
+   - I2C1: Deck expansion I2C bus (RX mode).
+   - I2C3: Internal sensors I2C bus (RX mode).
+4. DShot (Digital Electronic Speed Controller Protocol)
+   - TIM2 + DMA: Bidirectional and unidirectional digital motor control protocol (DShot150/300/600) and ESC telemetry capture.
+5. WS2812 / NeoPixel (Single-Wire RGB LED Protocol)
+   - TIM3 + DMA: High-speed single-wire NRZ pulse-width modulated bitstream generation at 800 kHz.
+
+--------------------------------------------------------------------------------
+FILES WITH DMA IMPLEMENTATION
+--------------------------------------------------------------------------------
+
+1. src/drivers/src/uart_syslink.c (Header: src/drivers/interface/uart_syslink.h)
+   - Protocol: UART (USART6) - Syslink coprocessor protocol
+   - DMA Hardware: DMA2 (Stream 7, Channel 5 for TX; Stream 1, Channel 5 for RX)
+   - Description: Implements DMA transmit (and optional DMA receive via CONFIG_SYSLINK_RX_DMA) for high-bandwidth Syslink packet transfers between the STM32F405 microcontroller and the radio/power-management coprocessor (nRF51822 or ESP32), offloading CRTP and trace packet handling.
+
+2. src/drivers/src/uart1.c (Header: src/drivers/interface/uart1.h)
+   - Protocol: UART (USART3)
+   - DMA Hardware: DMA1 (Stream 3, Channel 4 for TX)
+   - Description: Implements asynchronous and blocking DMA transmission for USART3 routed to expansion header pins, enabling efficient transmission of serial data without CPU cycle polling (conditionally disabled when sharing DMA stream with SPI2 BMI088).
+
+3. src/drivers/src/uart2.c (Header: src/drivers/interface/uart2.h)
+   - Protocol: UART (USART2)
+   - DMA Hardware: DMA1 (Stream 6, Channel 4 for TX)
+   - Description: Implements DMA-based TX buffering and transmission on USART2 for expansion decks, high-speed debug logging, and external ESP32 ROM bootloader flashing.
+
+4. src/drivers/src/i2c_drv.c (Header: src/drivers/interface/i2c_drv.h)
+   - Protocol: I2C (I2C1 for deck bus, I2C3 for onboard sensor bus)
+   - DMA Hardware: DMA1
+     * I2C1 (Deck): DMA1 Stream 0, Channel 1 (or Stream 5 when using alt pins)
+     * I2C3 (Sensors): DMA1 Stream 2, Channel 3
+   - Description: Implements DMA-based reception for I2C read transactions on both sensor and deck buses. While transmission is interrupt-driven, multi-byte incoming payloads are transferred directly into memory via DMA to eliminate per-byte ISR overhead.
+
+5. src/deck/api/deck_spi.c (Header: src/deck/api/deck_spi.h)
+   - Protocol: SPI (SPI1) - Primary deck SPI bus
+   - DMA Hardware: DMA2 (Stream 5, Channel 3 for TX; Stream 0, Channel 3 for RX)
+   - Description: Implements full-duplex synchronous DMA transfers for the primary deck SPI interface (SPI1), utilized by high-rate expansion decks including the Flow deck (optical flow / ToF sensors), Loco Positioning deck (UWB), and MicroSD deck.
+
+6. src/deck/api/deck_spi3.c (Header: src/deck/api/deck_spi3.h)
+   - Protocol: SPI (SPI3) - Alternative deck SPI bus
+   - DMA Hardware: DMA1 (Stream 7, Channel 0 for TX; Stream 0, Channel 0 for RX)
+   - Description: Implements full-duplex DMA transfers for the secondary/alternative deck SPI interface (SPI3), allowing high-throughput deck peripheral operations when expansion hardware uses alternate pin mappings.
+
+7. src/hal/src/sensors_bmi088_spi.c
+   - Protocol: SPI (SPI2) - IMU sensor SPI bus
+   - DMA Hardware: DMA1 (Stream 4, Channel 0 for TX; Stream 3, Channel 0 for RX)
+   - Description: Implements full-duplex SPI DMA transactions for high-speed sensor readings from the Bosch BMI088 6-axis accelerometer and gyroscope (used on Crazyflie Bolt and supported hardware variants).
+
+8. src/drivers/src/motors.c & src/drivers/src/motors_def.c (Header: src/drivers/interface/motors.h)
+   - Protocol: DShot (Digital ESC protocol - DShot150/300/600)
+   - DMA Hardware: DMA1 + TIM2
+     * Motor 1 (TIM2_CH2): DMA1 Stream 6, Channel 3
+     * Motor 2 (TIM2_CH4): DMA1 Stream 7, Channel 3
+     * Motor 3 (TIM2_CH1): DMA1 Stream 5, Channel 3
+     * Motor 4 (TIM2_CH3): DMA1 Stream 1, Channel 3
+   - Description: Uses Timer 2 capture/compare triggers coupled with DMA1 streams to generate precise DShot digital bit patterns directly to ESCs. In bidirectional DShot mode, uses Timer Input Capture with DMA to read and decode incoming GCR-encoded telemetry streams (motor RPM and health) sent back from the ESCs.
+
+9. src/drivers/src/ws2812_cf2.c (Header: src/drivers/interface/ws2812_cf2.h)
+   - Protocol: WS2812 / NeoPixel Timing Protocol (Single-wire NRZ pulse-width modulation @ 800 kHz)
+   - DMA Hardware: DMA1 + TIM3 (Stream 5, Channel 5)
+   - Description: Uses Timer 3 Channel 2 PWM driven by DMA1 in circular double-buffer mode to synthesize precise timing waveforms required by WS2812 RGB LEDs (such as the LED-ring deck), generating bit timing without CPU cycle-counting.
+
+--------------------------------------------------------------------------------
+SUPPORTING DMA INFRASTRUCTURE FILES
+--------------------------------------------------------------------------------
+- src/modules/interface/static_mem.h
+  Defines STATIC_MEM_DMA_SAFE and DMA_CCM_SAFE memory placement attributes to guarantee that buffers accessed by DMA are placed in standard SRAM rather than CCM (Core Coupled Memory), which cannot be accessed by STM32 DMA controllers.
+
+- src/utils/interface/cfassert.h
+  Defines ASSERT_DMA_SAFE() macro to validate at runtime that buffer pointers passed to DMA functions do not reside within the CCM memory range (0x10000000 - 0x1000FFFF).
+
+--------------------------------------------------------------------------------
+DETAILED CONFIGURATION OF SPI1 DMA STREAMS (src/deck/api/deck_spi.c)
+--------------------------------------------------------------------------------
+
+1. Peripheral & Common Configuration:
+   - Target Peripheral: SPI1 Data Register (SPI1->DR, address: (uint32_t)&(SPI->DR))
+   - DMA Controller: DMA2 (Clock: RCC_AHB1Periph_DMA2)
+   - Channel: DMA_Channel_3 (for both TX and RX)
+   - Data Width: Byte (8-bit) for both Memory and Peripheral
+     * DMA_MemoryDataSize: DMA_MemoryDataSize_Byte
+     * DMA_PeripheralDataSize: DMA_PeripheralDataSize_Byte
+   - Address Increment:
+     * Memory: DMA_MemoryInc_Enable (buffer pointers increment byte-by-byte)
+     * Peripheral: DMA_PeripheralInc_Disable (fixed SPI1->DR address)
+   - Burst Mode:
+     * Memory Burst: DMA_MemoryBurst_Single
+     * Peripheral Burst: DMA_PeripheralBurst_Single
+   - Mode & FIFO:
+     * DMA Mode: DMA_Mode_Normal (single-shot, stops when NDTR reaches 0)
+     * FIFO Mode: DMA_FIFOMode_Disable (Direct Mode enabled)
+     * FIFO Threshold: DMA_FIFOThreshold_1QuarterFull (unused in direct mode)
+   - Stream Priority: DMA_Priority_High
+   - NVIC Interrupt Priority: NVIC_SPI_PRI (NVIC_HIGH_PRI, subpriority 0)
+
+2. SPI_TX_DMA_STREAM (Transmit Stream):
+   - Stream Identifier: DMA2_Stream5
+   - Channel Selection: DMA_Channel_3
+   - Transfer Direction: DMA_DIR_MemoryToPeripheral
+   - IRQ Channel: DMA2_Stream5_IRQn (ISR: DMA2_Stream5_IRQHandler / SPI_TX_DMA_IRQHandler)
+   - TC Flag: DMA_FLAG_TCIF5
+   - Per-Transaction Setup (in spiExchange):
+     * M0AR: (uint32_t)data_tx
+     * NDTR: length
+     * Flags cleared: FEIF5, DMEIF5, TEIF5, HTIF5, TCIF5
+     * Interrupts enabled: DMA_IT_TC (Transfer Complete)
+   - Completion Handling:
+     * ISR disables TC interrupt and SPI TX DMA requests (SPI_I2S_DMAReq_Tx)
+     * Clears pending interrupt bits and stream flags
+     * Disables DMA2_Stream5
+     * Signals completion via FreeRTOS binary semaphore: xSemaphoreGiveFromISR(txComplete, ...)
+
+3. SPI_RX_DMA_STREAM (Receive Stream):
+   - Stream Identifier: DMA2_Stream0
+   - Channel Selection: DMA_Channel_3
+   - Transfer Direction: DMA_DIR_PeripheralToMemory
+   - IRQ Channel: DMA2_Stream0_IRQn (ISR: DMA2_Stream0_IRQHandler / SPI_RX_DMA_IRQHandler)
+   - TC Flag: DMA_FLAG_TCIF0
+   - Per-Transaction Setup (in spiExchange):
+     * M0AR: (uint32_t)data_rx
+     * NDTR: length
+     * Flags cleared: FEIF0, DMEIF0, TEIF0, HTIF0, TCIF0
+     * Interrupts enabled: DMA_IT_TC (Transfer Complete)
+   - Completion Handling:
+     * ISR disables TC interrupt and SPI RX DMA requests (SPI_I2S_DMAReq_Rx)
+     * Clears pending interrupt bits and stream flags
+     * Disables DMA2_Stream0
+     * Signals completion via FreeRTOS binary semaphore: xSemaphoreGiveFromISR(rxComplete, ...)
+
+4. Synchronization & Lifecycle:
+   - spiExchange() initiates both streams concurrently, enables SPI1, and suspends the calling FreeRTOS task:
+     (xSemaphoreTake(txComplete, portMAX_DELAY) == pdTRUE) && (xSemaphoreTake(rxComplete, portMAX_DELAY) == pdTRUE)
+   - Once both TX and RX ISRs have released their semaphores, spiExchange() disables the SPI peripheral and completes.
