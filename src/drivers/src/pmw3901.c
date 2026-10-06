@@ -34,6 +34,7 @@
 #include "param.h"
 #include "sleepus.h"
 
+#define PMW3901_PIXEL_COUNT 1225
 
 static bool isInit = false;
 
@@ -72,7 +73,7 @@ static uint8_t registerRead(const deckPin_t csPin, uint8_t reg)
   sleepus(50);
 
   spiExchange(1, &reg, &reg);
-  sleepus(500);
+  sleepus(100);
   spiExchange(1, &dummy, &data);
 
   sleepus(50);
@@ -208,6 +209,96 @@ bool pmw3901Init(const deckPin_t csPin)
     vTaskDelay(M2T(1));
 
     InitRegisters(csPin);
+
+    //begining of modified code
+    vTaskDelay(M2T(20));
+    
+    //test camera readout
+    //if (!frame_buffer) return false;
+
+    registerWrite(csPin, 0x7F, 0x07);  //Magic frame readout registers
+    registerWrite(csPin, 0x41, 0x1D);
+    registerWrite(csPin, 0x4C, 0x00);
+    registerWrite(csPin, 0x7F, 0x08);
+    registerWrite(csPin, 0x6A, 0x38);
+    registerWrite(csPin, 0x7F, 0x00);
+    registerWrite(csPin, 0x55, 0x04);
+    registerWrite(csPin, 0x40, 0x80);
+    registerWrite(csPin, 0x4D, 0x11);
+
+    registerWrite(csPin, 0x70, 0x00);   //More magic? 
+    registerWrite(csPin, 0x58, 0xFF);
+    
+    int temp_1, check_1;
+    /*
+    do { // keep reading
+      temp_1 = registerRead(csPin, 0x58); // the status register
+      check_1 = temp_1>>6; // rightshift 6 bits so only top two stay 
+    } while(check_1 == 0x03);
+    
+    sleepus(50);
+    */
+    int count = 0;
+    uint8_t a; //temp value for reading register
+    uint8_t b; //temp value for second register
+    uint8_t hold; //holding value for checking bits
+    uint8_t mask = 0x0c; //mask to take bits 2 and 3 from b
+    uint8_t pixel = 0; //temp holding value for pixel
+    uint8_t FBuffer[1225];
+
+    for (int ii = 0; ii < 1225; ii++) { //for 1 frame of 1225 pixels (35*35)
+      do { 
+        //if data is either invalid status
+        //check status bits 6 and 7
+        //if 01 move upper 6 bits into temp value
+        //if 00 or 11, reread
+        //else lower 2 bits into temp value
+        a = registerRead(csPin, 0x58); //read register
+        hold = a >> 6; //right shift to leave top two bits for ease of check.
+      } while((hold == 0x03) || (hold == 0x00));
+    
+      if (hold == 0x01) { //if data is upper 6 bits
+        b = registerRead(csPin, 0x58); //read next set to get lower 2 bits
+        pixel = a; //set pixel to a
+        pixel = pixel << 2; //push left to 7:2
+        pixel += (b & mask); //set lower 2 from b to 1:0
+        FBuffer[count++] = pixel; //put temp value in fbuffer array
+        //delayMicroseconds(100);
+      }
+    }
+    
+    registerWrite(csPin, 0x70, 0x00);   //More magic? 
+    registerWrite(csPin, 0x58, 0xFF);
+
+    do { //keep reading and testing
+      temp_1 = registerRead(csPin, 0x58); //read status register
+      check_1 = temp_1>>6; //rightshift 6 bits so only top two stay 
+    } while(check_1 == 0x03); //while bits aren't set denoting ready state
+
+    
+    /*
+    uint8_t frame_buffer[PMW3901_PIXEL_COUNT];
+
+    // 1. Switch to Bank 0
+    registerWrite(csPin, 0x7F, 0x00);
+    
+    // 2. Prepare pixel engine
+    registerWrite(csPin, 0x13, 0x00);
+    registerWrite(csPin, 0x58, 0xFF);
+    sleepus(100);
+
+    // 3. Read 35x35 pixels sequentially
+    for (int i = 0; i < PMW3901_PIXEL_COUNT; i++) {
+        frame_buffer[i] = registerRead(csPin, 0x58);
+    }
+
+    // 4. Return to normal optical tracking mode
+    registerWrite(csPin, 0x58, 0x00);
+    registerWrite(csPin, 0x13, 0x05);
+    registerWrite(csPin, 0x7F, 0x00);
+    */
+    vTaskDelay(M2T(20));
+    //end of modified code
 
     isInit = true;
   }

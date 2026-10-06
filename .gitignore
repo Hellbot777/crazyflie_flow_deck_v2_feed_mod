@@ -1,53 +1,14 @@
-build_info.json
-
-^bin/dep/all
-bin/*
-.cproject
-.project
-.pydevproject
-.settings/*
-.vscode/*
-*~
-cflie.*
-version.c
-tags
-*cffirmware*.so
-cffirmware.py
-
-/cf2.*
-/tag.*
-/bolt.*
-/flapper.*
-*.gch
-
-current_platform.mk
-
-/generated/**
-**/__pycache__/**
-**/*.pyc
-
-bindings/build/*
-bindings/cffirmware_wrap.c
-dist/
-
-docs/.jekyll-metadata
-docs/.jekyll-cache
-
-docs/api/logs.md_raw
-docs/api/params.md_raw
-docs/api/log_param_doc.json
-docs/api
-
-build/
-.cache/
-/compile_commands.json
-# To avoid that /tools/build is ignored
-!/tools/*
+# Created by venv; see https://docs.python.org/3/library/venv.html
+*
 
 **/*.o
 **/*.cmd
 **/*.a
 *.elf
+
+/generated/**
+**/__pycache__/**
+**/*.pyc
 
 tools/dependency/web/data.js
 
